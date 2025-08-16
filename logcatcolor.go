@@ -14,7 +14,7 @@ import (
 
 // LogcatOptions holds configuration for filtering logcat output
 type LogcatOptions struct {
-	Filter    string
+	Filters   []string
 	Tag       string
 	Level     string
 	Device    string        // Serial number of the device/emulator
@@ -67,9 +67,7 @@ func main() {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if shouldDisplayLine(line, opts) {
-				lastTag, lastTime, lastOther = printColoredLog(line, lastTag, lastTime, lastOther, opts)
-			}
+			lastTag, lastTime, lastOther = printColoredLog(line, lastTag, lastTime, lastOther, opts)
 		}
 
 		// Check for errors while scanning
@@ -99,7 +97,11 @@ func parseArgs() LogcatOptions {
 
 	fs := flag.NewFlagSet("logcatcolor", flag.ExitOnError)
 	// Define flags
-	filter := fs.String("s", "", "Filter string to match in log messages")
+	var filters []string
+	fs.Func("s", "Filter string to match in log messages (can be specified multiple times)", func(s string) error {
+		filters = append(filters, s)
+		return nil
+	})
 	tag := fs.String("t", "", "Filter by tag")
 	level := fs.String("l", "", "Filter by log level (V/D/I/W/E/F)")
 	device := fs.String("d", "", "Device serial number or -d for hardware device")
@@ -112,12 +114,17 @@ func parseArgs() LogcatOptions {
 	originalCmdArgs := os.Args[1:]
 	filteredCmdArgs := make([]string, 0, len(originalCmdArgs))
 	for i, arg := range originalCmdArgs {
-		if i+1 < len(originalCmdArgs) {
-			nextArg := originalCmdArgs[i+1]
-			isDashD := arg == "-d" || arg == "--d" || strings.HasPrefix(arg, "-d=") || strings.HasPrefix(arg, "--d=")
-			if isDashD && strings.HasPrefix(nextArg, "-") {
+		isDashD := arg == "-d" || arg == "--d" || strings.HasPrefix(arg, "-d=") || strings.HasPrefix(arg, "--d=")
+		if isDashD {
+			if i+1 == len(originalCmdArgs) {
 				opts.Device = "-d"
 				continue
+			} else if i+1 < len(originalCmdArgs) {
+				nextArg := originalCmdArgs[i+1]
+				if strings.HasPrefix(nextArg, "-") {
+					opts.Device = "-d"
+					continue
+				}
 			}
 		}
 		filteredCmdArgs = append(filteredCmdArgs, arg)
@@ -127,7 +134,7 @@ func parseArgs() LogcatOptions {
 	fs.Parse(filteredCmdArgs)
 
 	// Set options from flags
-	opts.Filter = *filter
+	opts.Filters = filters
 	opts.Tag = *tag
 	opts.Level = strings.ToUpper(*level)
 	opts.MaxDelta = *maxDelta
@@ -163,15 +170,11 @@ func buildAdbCommand(opts LogcatOptions) *exec.Cmd {
 		args = append(args, fmt.Sprintf("%s:%s", opts.Tag, opts.Level))
 	}
 
-	return exec.Command("adb", args...)
-}
-
-// shouldDisplayLine determines if a log line should be displayed based on filters
-func shouldDisplayLine(line string, opts LogcatOptions) bool {
-	if opts.Filter == "" {
-		return true
+	for _, filter := range opts.Filters {
+		args = append(args, "-s", filter)
 	}
-	return strings.Contains(strings.ToLower(line), strings.ToLower(opts.Filter))
+
+	return exec.Command("adb", args...)
 }
 
 // parseTimestamp parses the timestamp from a log line
